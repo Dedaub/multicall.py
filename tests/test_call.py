@@ -1,9 +1,9 @@
-from multicall import Call
 from web3 import Web3
 from web3.providers import HTTPProvider
 
-from .settings import CONFIG
+from multicall import Call
 
+from .settings import CONFIG
 
 CHAI = "0x06AF07097C9Eeb7fD685c692751D5C66dB49c215"
 

@@ -1,20 +1,18 @@
-from functools import reduce
-from typing import Any, Dict, Iterable, List
+from collections.abc import Iterable
+from typing import Any
 
-import eth_retry
 from web3 import Web3
 
-from multicall.constants import Network
+from multicall.constants import NO_STATE_OVERRIDE
 
-chainids: Dict[Web3, int] = {}
+chainids: dict[Web3, int] = {}
 
 
-def chunks(lst: List, n: int):
+def chunks(lst: list, n: int):
     for i in range(0, len(lst), n):
         yield lst[i : i + n]
 
 
-@eth_retry.auto_retry
 def chain_id(w3: Web3) -> int:
     """
     Returns chain id for an instance of Web3. Helps save repeat calls to node.
@@ -31,8 +29,8 @@ def get_endpoint(w3: Web3) -> str:
     if isinstance(provider, str):
         return provider
     if hasattr(provider, "_active_provider"):
-        provider = provider._get_active_provider(False)
-    return provider.endpoint_uri
+        provider = provider._get_active_provider(False)  # type: ignore
+    return provider.endpoint_uri  # type: ignore
 
 
 def raise_if_exception(obj: Any) -> None:
@@ -45,7 +43,7 @@ def raise_if_exception_in(iterable: Iterable[Any]) -> None:
         raise_if_exception(obj)
 
 
-def state_override_supported(w3: Web3) -> bool:
-    if chain_id(w3) in [Network.Gnosis]:
+def state_override_supported(chain_id: int) -> bool:
+    if chain_id in NO_STATE_OVERRIDE:
         return False
     return True

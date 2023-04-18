@@ -1,40 +1,46 @@
 import asyncio
-from collections import ChainMap
 import itertools
 import json
 import multiprocessing
+import multiprocessing.pool
+from collections import ChainMap
+from collections.abc import Sequence
 from time import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Union, cast
 
 import aiohttp
 from web3 import Web3
 from web3.providers import HTTPProvider
 
-from multicall import Call
-from multicall.constants import MULTICALL2_ADDRESSES, MULTICALL_ADDRESSES
+from multicall.call import Call
+from multicall.constants import (
+    GAS_LIMIT,
+    MULTICALL2_ADDRESSES,
+    MULTICALL3_ADDRESSES,
+    MULTICALL3_BYTECODE,
+)
 from multicall.errors import EthRPCError
 from multicall.loggers import setup_logger
-from multicall.utils import chunks, chain_id
-
+from multicall.utils import chain_id, get_endpoint, state_override_supported
 
 logger = setup_logger(__name__)
 
-CallResponse = Tuple[Union[None, bool], bytes]
+CallResponse = tuple[Union[None, bool], bytes]
 
 
 def get_args(
-    calls: List[Call], require_success: bool = True
-) -> List[Union[bool, List[List[Any]]]]:
+    calls: list[Call], require_success: bool = True
+) -> list[bool | list[list[Any]]]:
     if require_success is True:
         return [[[call.target, call.data] for call in calls]]
     return [require_success, [[call.target, call.data] for call in calls]]
 
 
-def unpack_aggregate_outputs(outputs: Any) -> Tuple[CallResponse, ...]:
+def unpack_aggregate_outputs(outputs: Any) -> tuple[CallResponse, ...]:
     return tuple((None, output) for output in outputs)
 
 
-def unpack_batch_results(batch_results: List[List[CallResponse]]) -> List[CallResponse]:
+def unpack_batch_results(batch_results: list[list[CallResponse]]) -> list[CallResponse]:
     return [result for batch in batch_results for result in batch]
 
 
@@ -55,55 +61,63 @@ def _initialize_multiprocessing():
 class Multicall:
     def __init__(
         self,
-        calls: List[Call],
-        batch_size: Optional[int] = None,
-        block_id: Optional[int] = None,
-        gas_limit: int = 1 << 31,
-        retries: int = 3,
+        calls: list[Call],
+        _w3: Web3,
+        block_id: int | None = None,
         require_success: bool = True,
-        _w3: Optional[Web3] = None,
+        gas_limit: int = GAS_LIMIT,
+        # Fork Specific Args
+        batch_size: int | None = None,
+        retries: int = 3,
         max_conns: int = 20,
         max_workers: int = min(12, multiprocessing.cpu_count() - 1),
-        # when the number of function calls to execute is above this threshold, multiprocessing is used
-        parallel_threshold: int = 1,
-        # timeout in seconds for a multicall batch
-        batch_timeout: int = 300,
+        parallel_threshold: int = 1,  # when the number of function calls to execute is above this threshold, multiprocessing is used
+        batch_timeout: int = 300,  # timeout in seconds for a multicall batch
     ) -> None:
+
         self.calls = calls
-        self.batch_size = (
-            batch_size if batch_size is not None else -(-len(calls) // max_conns)
-        )
         self.block_id = block_id
-        self.gas_limit = gas_limit
-        self.retries = retries
         self.require_success = require_success
-        self.node_uri = _w3.provider.endpoint_uri if _w3 else None
-        self.max_workers = max_workers
-        self.parallel_threshold = parallel_threshold if max_workers > 1 else 1 << 31
-        self.max_conns = max_conns
+        self.gas_limit = gas_limit
         self.chainid = chain_id(_w3)
+
+        # NOTE: do not assign the _w3 object, it cant be pickled for multiprocessing
+
         if require_success is True:
             multicall_map = (
-                MULTICALL_ADDRESSES
-                if self.chainid in MULTICALL_ADDRESSES
+                MULTICALL3_ADDRESSES
+                if self.chainid in MULTICALL3_ADDRESSES
                 else MULTICALL2_ADDRESSES
             )
             self.multicall_sig = "aggregate((address,bytes)[])(uint256,bytes[])"
         else:
-            multicall_map = MULTICALL2_ADDRESSES
+            multicall_map = (
+                MULTICALL3_ADDRESSES
+                if self.chainid in MULTICALL3_ADDRESSES
+                else MULTICALL2_ADDRESSES
+            )
             self.multicall_sig = "tryBlockAndAggregate(bool,(address,bytes)[])(uint256,uint256,(bool,bytes)[])"
         self.multicall_address = multicall_map[self.chainid]
+
+        self.batch_size = batch_size or -(-len(calls) // max_conns)
+        self.retries = retries
+        self.max_conns = max_conns
+        self.max_workers = max_workers
+
+        self.parallel_threshold = parallel_threshold if max_workers > 1 else 1 << 31
         self.batch_timeout = batch_timeout
 
-    def __repr__(self) -> str:
-        return f'Multicall {", ".join(set(map(lambda call: call.function, self.calls)))}, {len(self.calls)} calls'
+        self.node_uri = get_endpoint(_w3)
 
-    def __call__(self) -> Dict[str, Any]:
+    def __repr__(self) -> str:
+        return f'Multicall {", ".join({call.function for call in self.calls})}, {len(self.calls)} calls'
+
+    def __call__(self) -> dict[str, Any]:
         if len(self.calls) == 0:
             return {}
 
         start = time()
-        response: Dict[str, Any]
+        response: dict[str, Any]
         if -(-len(self.calls) // self.batch_size) > self.parallel_threshold:
             with multiprocessing.Pool(processes=self.max_workers) as p:
                 response = self.fetch_outputs(p)
@@ -112,21 +126,22 @@ class Multicall:
         logger.debug(f"Multicall took {time() - start}s")
         return response
 
-    def encode_args(self, calls_batch: List[Call]) -> List[Dict]:
-        args = get_args(calls_batch, self.require_success)
-        calldata = f"0x{self.aggregate.signature.encode_data(args).hex()}"
+    def encode_args(self, calls_batch: list[Call]) -> list[Any]:
+        _args = get_args(calls_batch, self.require_success)
+        calldata = f"0x{self.aggregate.signature.encode_data(_args).hex()}"
+
+        params: dict[str, Any] = {"to": self.aggregate.target, "data": calldata}
+        if self.gas_limit:
+            params["gas"] = f"0x{self.gas_limit:x}"
 
         args = [
-            {"to": self.aggregate.target, "data": calldata},
+            params,
             self.block_id if self.block_id is not None else "latest",
         ]
 
-        if self.gas_limit:
-            args[0]["gas"] = f"0x{self.gas_limit:x}"
-
         return args
 
-    def decode_outputs(self, calls_batch: List[Call], result: bytes):
+    def decode_outputs(self, calls_batch: list[Call], result: bytes):
         if self.require_success is True:
             _, outputs = Call.decode_output(
                 result, self.aggregate.signature, self.aggregate.returns
@@ -141,7 +156,6 @@ class Multicall:
             Call.decode_output(output, call.signature, call.returns, success)
             for call, (success, output) in zip(calls_batch, outputs)
         ]
-
         return {name: result for output in outputs for name, result in output.items()}
 
     async def rpc_eth_call(self, session: aiohttp.ClientSession, args):
@@ -170,9 +184,7 @@ class Multicall:
                     return EthRPCError.UNKNOWN
             return bytes.fromhex(data["result"][2:])
 
-    async def rpc_aggregator(
-        self, args_list: List[List]
-    ) -> List[Union[EthRPCError, bytes]]:
+    async def rpc_aggregator(self, args_list: list[list]) -> list[EthRPCError | bytes]:
 
         async with aiohttp.ClientSession(
             connector=aiohttp.TCPConnector(limit=self.max_conns),
@@ -182,13 +194,15 @@ class Multicall:
                 *[self.rpc_eth_call(session, args) for args in args_list]
             )
 
-    def fetch_outputs(self, p: Optional[multiprocessing.Pool] = None) -> Dict[str, Any]:
+    def fetch_outputs(
+        self, p: multiprocessing.pool.Pool | None = None
+    ) -> dict[str, Any]:
         calls = self.calls
 
-        outputs = {}
+        outputs: dict[str, Any] = {}
 
         for batch_size in itertools.chain(
-            map(lambda i: self.batch_size // (1 << i), range(self.retries)), [1]
+            (self.batch_size // (1 << i) for i in range(self.retries)), [1]
         ):
 
             if len(calls) == 0:
@@ -199,7 +213,7 @@ class Multicall:
                 for batch in range(0, len(calls), batch_size)
             ]
 
-            encoded_args: List
+            encoded_args: list
             if p and len(batches) > self.parallel_threshold:
                 encoded_args = list(
                     p.imap(
@@ -232,7 +246,10 @@ class Multicall:
                 for batch, result in zip(batches, results)
                 if not isinstance(result, EthRPCError)
             ]
-            batches, results = zip(*successes) if len(successes) else ([], [])
+
+            batches, results = zip(*successes) if len(successes) else ([], [])  # type: ignore
+            batches = cast(Sequence[list[Call]], batches)  # type: ignore
+            results = cast(Sequence[bytes], results)  # type: ignore
 
             if p and len(batches) > self.parallel_threshold:
                 outputs.update(
@@ -245,12 +262,26 @@ class Multicall:
                     )
                 )
             else:
-                outputs.update(ChainMap(*map(self.decode_outputs, batches, results)))
+                outputs.update(ChainMap(*map(self.decode_outputs, batches, results)))  # type: ignore
 
         return outputs
 
     @property
     def aggregate(self) -> Call:
+
+        if state_override_supported(self.chainid):
+            return Call(
+                self.multicall_address,
+                self.multicall_sig,
+                returns=None,
+                _w3=Web3(HTTPProvider(self.node_uri)),
+                block_id=self.block_id,
+                gas_limit=self.gas_limit,
+                state_override_code=MULTICALL3_BYTECODE,
+            )
+
+        # If state override is not supported, we simply skip it.
+        # This will mean you're unable to access full historical data on chains without state override support.
         return Call(
             self.multicall_address,
             self.multicall_sig,

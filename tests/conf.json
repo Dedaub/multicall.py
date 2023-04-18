@@ -1,0 +1,6 @@
+{
+    "networks": {
+        "1": "http://localhost:8090/ethereum",
+        "250": "http://localhost:8090/fantom"
+    }
+}

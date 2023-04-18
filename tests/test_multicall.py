@@ -1,18 +1,16 @@
-import json
 import gzip
-from multicall import Call, Multicall
+import json
 import os
 
 import pytest
 from web3 import Web3
 from web3.providers import HTTPProvider
 
+from multicall import Call, Multicall
+
 from .settings import CONFIG
 
-
 MULTICALLS_DIR = os.path.join(os.path.dirname(__file__), "data")
-
-
 MULTICALL_FILES = ["multicall1.json.gz", "multicall2.json.gz", "multicall3.json.gz"]
 
 
@@ -31,12 +29,11 @@ def test_multicall(fname):
         network_uri = CONFIG["networks"][str(network)]
 
         multi = Multicall(
-            list(map(lambda c: Call(*c["call"]), calls)),
+            [Call(*c["call"]) for c in calls],
             _w3=Web3(HTTPProvider(network_uri)),
             require_success=require_success,
             parallel_threshold=parallel_threshold,
         )
-
         results = multi()
 
         assert len(results) == len(calls), "Not all calls were executed"
