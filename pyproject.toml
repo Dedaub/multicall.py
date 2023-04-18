@@ -1,20 +1,20 @@
 [tool.poetry]
 name = "multicall"
-version = "0.5.1"
+version = "0.7.1"
 description = "aggregate results from multiple ethereum contract calls"
-authors = ["banteg <banteeg@gmail.com>"]
+authors = ["banteg"]
 
 [tool.poetry.dependencies]
-python = "^3.8"
-web3 = "^5.29.0"
-eth_retry = "0.1.11"
+python = "^3.10.0"
+eth_retry = "^0.1.17"
 aiohttp = "^3.8.1"
+web3 = "^6.2.0"
+dill = "^0.3.6"
 
-[tool.poetry.dev-dependencies]
-pytest = "^6.2.5"
-flake8 = "^4.0.1"
-black = "^21.12b0"
-joblib = "^1.1.0"
+[tool.poetry.group.dev.dependencies]
+mypy = "^0.991"
+pytest = "^7.2.0"
+types-setuptools = "^67.6.0.8"
 
 [build-system]
 requires = ["poetry-core>=1.0.8"]

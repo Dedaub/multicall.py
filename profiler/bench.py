@@ -3,7 +3,7 @@ import json
 import os
 import sys
 import time
-from typing import Mapping, Union
+from typing import Mapping
 
 import memray
 from web3 import Web3
@@ -35,7 +35,7 @@ def build_multicall(conf: Mapping, json_file: str) -> Multicall:
 
         chain_id = data["chain_id"]
         require_success = data["require_success"]
-        workers = data["workers"]
+        data["workers"]
 
         return Multicall(
             calls,

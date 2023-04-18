@@ -18,15 +18,14 @@ pip install multicall
   This provides handling for calls that `throw()`.
 
 - The package still uses asyncio+multiprocessing, but the workflow has changed:
-  
+
   1. Calls are split into batches of `batch_size`.
   2. Encoding is done in a (per `Multicall` object) process pool (depending on the value of `parallel_threshold`).
   3. The web3 call is done in an asyncio loop in the main process.
   4. Decoding is done in a process pool (depending on the value of `parallel_threshold`).
   5. The calls in failed batches are rebatched and rerun for `retries` times.
-  
-  By default the multiprocessing `forkserver` [start method](https://docs.python.org/3/library/multiprocessing.html#contexts-and-start-methods) is used to avoid high memory consumption.
 
+  By default the multiprocessing `forkserver` [start method](https://docs.python.org/3/library/multiprocessing.html#contexts-and-start-methods) is used to avoid high memory consumption.
 
 ## example
 
@@ -42,14 +41,11 @@ MKR_FISH = '0x2dfcedcb401557354d0cf174876ab17bfd6f4efd'
 def from_wei(value):
     return value / 1e18
 
-multi = Multicall(
-    [
-        Call(MKR_TOKEN, ['balanceOf(address)(uint256)', MKR_WHALE], [['whale', from_wei]]),
-        Call(MKR_TOKEN, ['balanceOf(address)(uint256)', MKR_FISH], [['fish', from_wei]]),
-        Call(MKR_TOKEN, 'totalSupply()(uint256)', [['supply', from_wei]]),
-    ],
-    _w3=web3.web
-)
+multi = Multicall([
+    Call(MKR_TOKEN, ['balanceOf(address)(uint256)', MKR_WHALE], [('whale', from_wei)]),
+    Call(MKR_TOKEN, ['balanceOf(address)(uint256)', MKR_FISH], [('fish', from_wei)]),
+    Call(MKR_TOKEN, 'totalSupply()(uint256)', [('supply', from_wei)]),
+])
 
 multi()  # {'whale': 566437.0921992733, 'fish': 7005.0, 'supply': 1000003.1220798912}
 
@@ -109,7 +105,6 @@ Multicall(
 - `parallel_threshold` is the number of calls above which parallel encoding/decoding is activated.
 - `batch_timeout` is the timeout for a single multicall batch.
 
-
 use `Multicall(...)()` to get the result of a prepared multicall.
 
 ### Environment Variables
@@ -126,7 +121,7 @@ The config file must have the following format:
 {
     "networks": {
         "1": http://localhost,
-        ... 
+        ...
     }
 }
 ```
@@ -138,3 +133,14 @@ python -m pytest
 ```
 
 Some of the test multicalls are JSON serialized and GZIP-compressed (under the directory `/tests/data`), so your mileage may vary dependening on OS.
+
+- MULTICALL_PROCESSES: pass an integer > 1 to use multiprocessing for encoding args and decoding results. Default: 1, which executes all code in the main process.
+- AIOHTTP_TIMEOUT: sets aiohttp timeout period in seconds for async calls to node. Default: 30
+
+## test
+
+```bash
+export WEB3_INFURE_PROJECT_ID=<your_infura_id>
+export PYTEST_NETWORK='mainnet'
+poetry run python -m pytest
+```

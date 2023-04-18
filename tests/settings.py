@@ -2,7 +2,6 @@ import json
 import os
 from typing import Dict
 
-
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "conf.json")
 
 
